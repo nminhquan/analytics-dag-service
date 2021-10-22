@@ -1,0 +1,41 @@
+version: 0.2
+# env:
+#   parameter-store:
+#     SONARCLOUD_TOKEN: /tyme/factory/sonarcloud/token/buildbot
+phases:
+  install:
+    runtime-versions:
+      python: 3.8
+  pre_build:
+    commands:
+      - aws --version
+      - python --version
+      - echo "Get CodeArtifact Token"
+      - export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain tyme --domain-owner 665484546001 --query authorizationToken --output text)
+      - echo "Get Branch Name"
+      - export BRANCH=$(echo $CODEBUILD_WEBHOOK_TRIGGER | sed -e 's/branch\///')
+      - echo "Logging in to current account ECR service"
+      - $(aws ecr get-login --no-include-email)
+  build:
+    commands:
+      # - echo echo "Tag image based on branch $BRANCH. If the branch name is matched the defined primary branch of the repo, tag with M letter"
+      - export IMAGE_NAME="analytics-dag-service"
+      - export IMAGE_TAG="0.2.1"
+      - |
+        if [ "$BRANCH" == "$REPO_PRIMARY_BRANCH" ]; then
+          export IMAGE_TAG="${IMAGE_TAG}-M${CODEBUILD_BUILD_NUMBER}"
+        elif grep -q 'bugfix/' <<< ${BRANCH}; then
+          export IMAGE_TAG="${IMAGE_TAG}-BUGFIX-${CODEBUILD_BUILD_NUMBER}"
+        elif grep -q 'hotfix/' <<< ${BRANCH}; then
+          export IMAGE_TAG="${IMAGE_TAG}-HOTFIX-${CODEBUILD_BUILD_NUMBER}"
+        else
+          export IMAGE_TAG="${IMAGE_TAG}-SNAPSHOT-${CODEBUILD_BUILD_NUMBER}"
+        fi
+      - docker build --no-cache -t $IMAGE_NAME:$IMAGE_TAG .
+      - docker tag $IMAGE_NAME:$IMAGE_TAG $ECR_REPO_URI:$IMAGE_TAG
+  post_build:
+    commands:
+      - echo "Pushing the Docker images $ECR_REPO_URI:$IMAGE_TAG to remote account ECR repo"
+      - aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REPO_URI
+      - docker push $ECR_REPO_URI:$IMAGE_TAG
+      - echo "Build completed on $(date)"
